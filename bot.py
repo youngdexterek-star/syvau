@@ -6,7 +6,7 @@ import paramiko
 import random
 
 # ================= CONFIG =================
-TOKEN = "MTQ4NTI3MzAxNTEyOTM0MjAxNA.GPaUU7.ptQVjQYzwdRdd5SdMdEQ14hsxpCVqw-gosP5KY"
+TOKEN = "MTQ4NTI3MzAxNTEyOTM0MjAxNA.GeI1LB.2Xtz4E_EdQewRlXaMCVQsKMcvMh_nhK8nX5Fp8"
 
 FREEPBX_URL = "http://vps16049.awhost.cloud/admin/api/api/gql"
 TOKEN_URL = "http://vps16049.awhost.cloud/admin/api/api/token"
