@@ -23,6 +23,11 @@ SSH_USER = "root"
 SSH_PASSWORD = "vmv5w6bM8QaYBPKA"
 # ==========================================
 
+# Inicjalizacja bota - to MUSI być przed definicją komend
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix="/", intents=intents)
+tree = bot.tree  # <--- to musi być zdefiniowane przed użyciem @tree.command
+
 # ================= BAZA DANYCH =================
 DB_FILE = "konta.db"
 
@@ -370,6 +375,7 @@ class AdminPanel(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ================= COMMANDS =================
+# Komendy muszą być zdefiniowane PO utworzeniu instancji bota i tree
 
 @tree.command(name="panel", description="Wysyła panel z guzikiem")
 async def panel(interaction: discord.Interaction):
@@ -433,4 +439,5 @@ async def on_ready():
     print(f"Zalogowano jako {bot.user}")
     print(f"Baza danych: {DB_FILE}")
 
-bot.run(TOKEN)
+if __name__ == "__main__":
+    bot.run(TOKEN)
