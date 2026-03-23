@@ -230,13 +230,13 @@ class Panel(discord.ui.View):
             # Tworzenie wiadomości o utworzeniu konta
             if is_unlimited:
                 embed = discord.Embed(
-                    title="📞 Twoje nowe konto VoIP (nieograniczone)",
+                    title="📞 Twoje konto na naszym serwerze VoIP",
                     description=f"To jest Twoje **{self.get_account_count(interaction.user.id)}** konto!",
                     color=0x00ff00
                 )
             else:
                 embed = discord.Embed(
-                    title="📞 Twoje konto VoIP",
+                    title="📞 Twoje konto na naszym serwerze VoIP",
                     color=0x00ff00
                 )
 
@@ -245,15 +245,12 @@ class Panel(discord.ui.View):
             embed.add_field(name="Serwer SIP", value="`sip.voxelvoip.pl`", inline=False)
             embed.add_field(name="Domena", value="`sip.voxelvoip.pl`", inline=False)
 
-            if is_unlimited:
-                embed.add_field(name="ℹ️ Informacja", value="Jako uprzywilejowany użytkownik możesz tworzyć nieograniczoną liczbę kont!", inline=False)
-
             await interaction.user.send(embed=embed)
 
             # Komunikat potwierdzający
             if is_unlimited:
                 await interaction.followup.send(
-                    f"✅ Konto {real_ext} utworzone pomyślnie! Sprawdź DM. (To Twoje {self.get_account_count(interaction.user.id)} konto)",
+                    "✅ Konto utworzone pomyślnie! Sprawdź DM.",
                     ephemeral=True
                 )
             else:
