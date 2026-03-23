@@ -6,6 +6,7 @@ import paramiko
 import random
 import sqlite3
 import os
+from datetime import datetime
 
 # ================= CONFIG =================
 TOKEN = "MTQ4NTI3MzAxNTEyOTM0MjAxNA.GPaUU7.ptQVjQYzwdRdd5SdMdEQ14hsxpCVqw-gosP5KY"
@@ -20,92 +21,156 @@ SSH_HOST = "194.110.5.240"
 SSH_PORT = 2022
 SSH_USER = "root"
 SSH_PASSWORD = "vmv5w6bM8QaYBPKA"
-
-# Specjalny użytkownik z nieograniczonym dostępem
-UNLIMITED_USER_ID = 1404073935259041923
 # ==========================================
 
-intents = discord.Intents.default()
-bot = commands.Bot(command_prefix="/", intents=intents)
-tree = bot.tree
-
-# Inicjalizacja bazy danych
-DB_NAME = "accounts.db"
+# ================= BAZA DANYCH =================
+DB_FILE = "konta.db"
 
 def init_database():
     """Inicjalizuje bazę danych i tworzy tabelę jeśli nie istnieje"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # Tworzenie tabeli accounts jeśli nie istnieje
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS accounts (
-            user_id INTEGER PRIMARY KEY,
-            extension TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            has_account INTEGER DEFAULT 0
+        CREATE TABLE IF NOT EXISTS konta (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            discord_user_id TEXT NOT NULL UNIQUE,
+            discord_user_name TEXT NOT NULL,
+            extension_number TEXT NOT NULL,
+            extension_password TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL,
+            is_active BOOLEAN DEFAULT 1
         )
     ''')
     
     conn.commit()
     conn.close()
 
-def user_has_account(user_id):
-    """Sprawdza czy użytkownik ma już utworzone konto"""
-    conn = sqlite3.connect(DB_NAME)
+def save_user_account(discord_user_id, discord_user_name, extension_number, extension_password):
+    """Zapisuje informacje o utworzonym koncie do bazy danych"""
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    cursor.execute("SELECT has_account FROM accounts WHERE user_id = ?", (user_id,))
-    result = cursor.fetchone()
-    
-    conn.close()
-    
-    if result:
-        return result[0] == 1
-    return False
+    try:
+        cursor.execute('''
+            INSERT INTO konta (discord_user_id, discord_user_name, extension_number, extension_password, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (str(discord_user_id), discord_user_name, extension_number, extension_password, datetime.now()))
+        
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False  # Użytkownik już ma konto
+    finally:
+        conn.close()
 
-def set_user_account(user_id, extension):
-    """Ustawia dla użytkownika, że ma utworzone konto"""
-    conn = sqlite3.connect(DB_NAME)
+def get_user_account(discord_user_id):
+    """Pobiera informacje o koncie użytkownika z bazy danych"""
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
     cursor.execute('''
-        INSERT OR REPLACE INTO accounts (user_id, extension, has_account)
-        VALUES (?, ?, 1)
-    ''', (user_id, extension))
+        SELECT discord_user_id, discord_user_name, extension_number, extension_password, created_at, is_active
+        FROM konta 
+        WHERE discord_user_id = ? AND is_active = 1
+    ''', (str(discord_user_id),))
+    
+    result = cursor.fetchone()
+    conn.close()
+    
+    if result:
+        return {
+            'discord_user_id': result[0],
+            'discord_user_name': result[1],
+            'extension_number': result[2],
+            'extension_password': result[3],
+            'created_at': result[4],
+            'is_active': result[5]
+        }
+    return None
+
+def check_user_has_extension(discord_user_id):
+    """Sprawdza czy użytkownik ma już utworzone konto"""
+    return get_user_account(discord_user_id) is not None
+
+def get_user_extensions():
+    """Pobiera istniejące numery użytkowników z bazy danych"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT discord_user_id, extension_number 
+        FROM konta 
+        WHERE is_active = 1
+    ''')
+    
+    results = cursor.fetchall()
+    conn.close()
+    
+    user_extensions = {}
+    for discord_user_id, extension_number in results:
+        user_extensions[int(discord_user_id)] = extension_number
+    
+    return user_extensions
+
+def get_all_users():
+    """Pobiera wszystkich użytkowników z bazy danych"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT discord_user_id, discord_user_name, extension_number, created_at, is_active
+        FROM konta 
+        ORDER BY created_at DESC
+    ''')
+    
+    results = cursor.fetchall()
+    conn.close()
+    
+    users = []
+    for result in results:
+        users.append({
+            'discord_user_id': result[0],
+            'discord_user_name': result[1],
+            'extension_number': result[2],
+            'created_at': result[3],
+            'is_active': result[4]
+        })
+    
+    return users
+
+def update_user_status(discord_user_id, is_active):
+    """Aktualizuje status konta użytkownika"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        UPDATE konta 
+        SET is_active = ?
+        WHERE discord_user_id = ?
+    ''', (is_active, str(discord_user_id)))
     
     conn.commit()
     conn.close()
 
-def get_user_extension(user_id):
-    """Pobiera numer telefonu dla danego użytkownika"""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT extension FROM accounts WHERE user_id = ?", (user_id,))
-    result = cursor.fetchone()
-    
-    conn.close()
-    
-    if result:
-        return result[0]
-    return None
+def delete_user_account(discord_user_id):
+    """Usuwa konto użytkownika z bazy danych (soft delete)"""
+    update_user_status(discord_user_id, 0)
 
-def get_all_user_extensions():
-    """Pobiera wszystkie numery użytkowników z bazy danych"""
-    conn = sqlite3.connect(DB_NAME)
+def get_stats():
+    """Pobiera statystyki z bazy danych"""
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    cursor.execute("SELECT user_id, extension FROM accounts WHERE has_account = 1")
-    results = cursor.fetchall()
+    cursor.execute('SELECT COUNT(*) FROM konta WHERE is_active = 1')
+    active_count = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT COUNT(*) FROM konta')
+    total_count = cursor.fetchone()[0]
     
     conn.close()
     
-    extensions_dict = {}
-    for user_id, extension in results:
-        extensions_dict[user_id] = extension
-    
-    return extensions_dict
+    return {'active': active_count, 'total': total_count}
 
 # ================= FREEPBX =================
 
@@ -196,14 +261,12 @@ class Panel(discord.ui.View):
 
     @discord.ui.button(label="📞 Utwórz konto", style=discord.ButtonStyle.green)
     async def create(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         await interaction.response.defer(ephemeral=True)
 
         try:
-            # Sprawdzenie czy użytkownik ma specjalne uprawnienia
-            is_unlimited = interaction.user.id == UNLIMITED_USER_ID
-            
-            # Jeśli nie jest specjalnym użytkownikiem, sprawdź czy ma już konto
-            if not is_unlimited and user_has_account(interaction.user.id):
+            # Sprawdzenie czy użytkownik ma już numer
+            if check_user_has_extension(interaction.user.id):
                 await interaction.followup.send(
                     "❌ Można posiadać tylko jeden numer!",
                     ephemeral=True
@@ -224,295 +287,140 @@ class Panel(discord.ui.View):
             real_ext = data["user"]["extension"]
             password = data["user"]["extPassword"]
 
-            # Zapisz utworzony numer dla użytkownika
-            set_user_account(interaction.user.id, real_ext)
-
-            # Tworzenie wiadomości o utworzeniu konta
-            if is_unlimited:
-                embed = discord.Embed(
-                    title="📞 Twoje konto na naszym serwerze VoIP",
-                    description=f"To jest Twoje **{self.get_account_count(interaction.user.id)}** konto!",
-                    color=0x00ff00
-                )
-            else:
-                embed = discord.Embed(
-                    title="📞 Twoje konto na naszym serwerze VoIP",
-                    color=0x00ff00
-                )
-
-            embed.add_field(name="Numer", value=f"`{real_ext}`", inline=False)
-            embed.add_field(name="Hasło", value=f"||{password}||", inline=False)
-            embed.add_field(name="Serwer SIP", value="`sip.voxelvoip.pl`", inline=False)
-            embed.add_field(name="Domena", value="`sip.voxelvoip.pl`", inline=False)
-
-            await interaction.user.send(embed=embed)
-
-            # Komunikat potwierdzający
-            if is_unlimited:
-                await interaction.followup.send(
-                    "✅ Konto utworzone pomyślnie! Sprawdź DM.",
-                    ephemeral=True
-                )
-            else:
-                await interaction.followup.send(
-                    "✅ Konto utworzone pomyślnie! Sprawdź DM.",
-                    ephemeral=True
-                )
-
-        except Exception as e:
-            await interaction.followup.send(
-                f"❌ Błąd: {e}",
-                ephemeral=True
+            # Zapisz w bazie danych
+            success = save_user_account(
+                interaction.user.id,
+                interaction.user.display_name,
+                real_ext,
+                password
             )
-    
-    def get_account_count(self, user_id):
-        """Liczy ile kont ma dany użytkownik"""
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT COUNT(*) FROM accounts WHERE user_id = ?", (user_id,))
-        count = cursor.fetchone()[0]
-        
-        conn.close()
-        return count
-
-@discord.ui.button(label="📊 Sprawdź konto", style=discord.ButtonStyle.blurple)
-async def check_account(self, interaction: discord.Interaction, button: discord.ui.Button):
-    """Przycisk do sprawdzania czy użytkownik ma konto"""
-    await interaction.response.defer(ephemeral=True)
-    
-    is_unlimited = interaction.user.id == UNLIMITED_USER_ID
-    
-    if user_has_account(interaction.user.id):
-        extension = get_user_extension(interaction.user.id)
-        
-        embed = discord.Embed(
-            title="📊 Informacje o koncie",
-            color=0x00ff00
-        )
-        embed.add_field(name="Status", value="✅ Posiadasz konto VoIP", inline=False)
-        embed.add_field(name="Twój numer", value=f"`{extension}`", inline=False)
-        
-        if is_unlimited:
-            account_count = self.get_account_count(interaction.user.id)
-            embed.add_field(name="Ilość kont", value=f"Posiadasz {account_count} kont", inline=False)
-        
-        await interaction.followup.send(embed=embed, ephemeral=True)
-    else:
-        embed = discord.Embed(
-            title="📊 Informacje o koncie",
-            description="❌ Nie posiadasz jeszcze konta VoIP",
-            color=0xff0000
-        )
-        embed.add_field(name="Co teraz?", value="Kliknij przycisk 'Utwórz konto' aby rozpocząć!", inline=False)
-        
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-# Dodanie drugiego przycisku do panelu
-class Panel(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-    
-    @discord.ui.button(label="📞 Utwórz konto", style=discord.ButtonStyle.green)
-    async def create(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-
-        try:
-            # Sprawdzenie czy użytkownik ma specjalne uprawnienia
-            is_unlimited = interaction.user.id == UNLIMITED_USER_ID
             
-            # Jeśli nie jest specjalnym użytkownikiem, sprawdź czy ma już konto
-            if not is_unlimited and user_has_account(interaction.user.id):
+            if not success:
                 await interaction.followup.send(
-                    "❌ Można posiadać tylko jeden numer!",
+                    "❌ Wystąpił błąd podczas zapisywania konta!",
                     ephemeral=True
                 )
                 return
 
-            ext = generate_extension()
-
-            # create extension
-            create_extension(ext, interaction.user.display_name, interaction.user.id)
-
-            # reload pbx
-            reload_pbx()
-
-            # fetch real password
-            data = get_extension_data(ext)
-
-            real_ext = data["user"]["extension"]
-            password = data["user"]["extPassword"]
-
-            # Zapisz utworzony numer dla użytkownika
-            set_user_account(interaction.user.id, real_ext)
-
-            # Tworzenie wiadomości o utworzeniu konta
-            account_count = self.get_account_count(interaction.user.id)
-            
-            if is_unlimited:
-                embed = discord.Embed(
-                    title="📞 Twoje nowe konto VoIP (nieograniczone)",
-                    description=f"To jest Twoje **{account_count}** konto!",
-                    color=0x00ff00
-                )
-            else:
-                embed = discord.Embed(
-                    title="📞 Twoje konto VoIP",
-                    color=0x00ff00
-                )
-
-            embed.add_field(name="Numer", value=f"`{real_ext}`", inline=False)
-            embed.add_field(name="Hasło", value=f"||{password}||", inline=False)
-            embed.add_field(name="Serwer SIP", value="`sip.voxelvoip.pl`", inline=False)
-            embed.add_field(name="Domena", value="`sip.voxelvoip.pl`", inline=False)
-
-            if is_unlimited:
-                embed.add_field(name="ℹ️ Informacja", value="Jako uprzywilejowany użytkownik możesz tworzyć nieograniczoną liczbę kont!", inline=False)
-
-            await interaction.user.send(embed=embed)
-
-            # Komunikat potwierdzający
-            if is_unlimited:
-                await interaction.followup.send(
-                    f"✅ Konto {real_ext} utworzone pomyślnie! Sprawdź DM. (To Twoje {account_count} konto)",
-                    ephemeral=True
-                )
-            else:
-                await interaction.followup.send(
-                    "✅ Konto utworzone pomyślnie! Sprawdź DM.",
-                    ephemeral=True
-                )
-
-        except Exception as e:
-            await interaction.followup.send(
-                f"❌ Błąd: {e}",
-                ephemeral=True
-            )
-    
-    @discord.ui.button(label="📊 Sprawdź konto", style=discord.ButtonStyle.blurple)
-    async def check_account(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Przycisk do sprawdzania czy użytkownik ma konto"""
-        await interaction.response.defer(ephemeral=True)
-        
-        is_unlimited = interaction.user.id == UNLIMITED_USER_ID
-        
-        if user_has_account(interaction.user.id):
-            extension = get_user_extension(interaction.user.id)
-            
             embed = discord.Embed(
-                title="📊 Informacje o koncie",
+                title="📞 Twoje konto VoIP",
                 color=0x00ff00
             )
-            embed.add_field(name="Status", value="✅ Posiadasz konto VoIP", inline=False)
-            embed.add_field(name="Twój numer", value=f"`{extension}`", inline=False)
-            
-            if is_unlimited:
-                account_count = self.get_account_count(interaction.user.id)
-                embed.add_field(name="Ilość kont", value=f"Posiadasz {account_count} kont", inline=False)
-            
-            await interaction.followup.send(embed=embed, ephemeral=True)
-        else:
-            embed = discord.Embed(
-                title="📊 Informacje o koncie",
-                description="❌ Nie posiadasz jeszcze konta VoIP",
-                color=0xff0000
+
+            embed.add_field(name="Numer", value=f"`{real_ext}`", inline=False)
+            embed.add_field(name="Hasło", value=f"||{password}||", inline=False)
+            embed.add_field(name="Serwer SIP", value="`sip.voxelvoip.pl`", inline=False)
+            embed.add_field(name="Domena", value="`sip.voxelvoip.pl`", inline=False)
+
+            await interaction.user.send(embed=embed)
+
+            await interaction.followup.send(
+                "✅ Konto utworzone, sprawdź DM",
+                ephemeral=True
             )
-            embed.add_field(name="Co teraz?", value="Kliknij przycisk 'Utwórz konto' aby rozpocząć!", inline=False)
-            
-            await interaction.followup.send(embed=embed, ephemeral=True)
-    
-    def get_account_count(self, user_id):
-        """Liczy ile kont ma dany użytkownik"""
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT COUNT(*) FROM accounts WHERE user_id = ?", (user_id,))
-        count = cursor.fetchone()[0]
-        
-        conn.close()
-        return count
 
-# ================= COMMAND =================
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ Error: {e}",
+                ephemeral=True
+            )
 
-@tree.command(name="panel", description="Wysyła panel z guzikami")
+class AdminPanel(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="📊 Statystyki", style=discord.ButtonStyle.blurple)
+    async def stats(self, interaction: discord.Interaction, button: discord.ui.Button):
+        stats = get_stats()
+        
+        embed = discord.Embed(
+            title="📊 Statystyki kont",
+            color=0x00ff00
+        )
+        
+        embed.add_field(name="Aktywne konta", value=str(stats['active']), inline=True)
+        embed.add_field(name="Wszystkie konta", value=str(stats['total']), inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="👥 Lista użytkowników", style=discord.ButtonStyle.blurple)
+    async def list_users(self, interaction: discord.Interaction, button: discord.ui.Button):
+        users = get_all_users()
+        
+        if not users:
+            await interaction.response.send_message("Brak użytkowników w bazie.", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="👥 Lista użytkowników",
+            color=0x00ff00
+        )
+        
+        for user in users[:10]:  # Limit do 10 użytkowników na embed
+            status = "✅ Aktywny" if user['is_active'] else "❌ Nieaktywny"
+            embed.add_field(
+                name=f"{user['discord_user_name']} ({user['discord_user_id']})",
+                value=f"Numer: {user['extension_number']}\nUtworzono: {user['created_at']}\nStatus: {status}",
+                inline=False
+            )
+        
+        if len(users) > 10:
+            embed.set_footer(text=f"Pokażę tylko 10 z {len(users)} użytkowników")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# ================= COMMANDS =================
+
+@tree.command(name="panel", description="Wysyła panel z guzikiem")
 async def panel(interaction: discord.Interaction):
+
     embed = discord.Embed(
         title="📞 System VoIP",
-        description="Kliknij przycisk poniżej aby utworzyć konto lub sprawdzić swoje konto.",
+        description="Kliknij przycisk poniżej aby utworzyć konto.",
         color=0x00ff00
     )
-    
-    # Dodanie informacji o specjalnym użytkowniku jeśli to on wywołuje komendę
-    if interaction.user.id == UNLIMITED_USER_ID:
-        embed.add_field(
-            name="👑 Uprzywilejowany dostęp",
-            value="Jesteś uprzywilejowanym użytkownikiem! Możesz tworzyć nieograniczoną liczbę kont.",
-            inline=False
-        )
-    
-    await interaction.channel.send(embed=embed, view=Panel())
-    await interaction.response.send_message("✅ Panel został wysłany", ephemeral=True)
 
-@tree.command(name="admin_list_accounts", description="Lista wszystkich kont (tylko dla admina)")
-async def admin_list_accounts(interaction: discord.Interaction):
-    """Komenda admina do wyświetlenia wszystkich kont"""
-    if interaction.user.id != UNLIMITED_USER_ID:
+    await interaction.channel.send(embed=embed, view=Panel())
+    await interaction.response.send_message("✅ Panel wysłany", ephemeral=True)
+
+@tree.command(name="admin", description="Panel administracyjny")
+async def admin(interaction: discord.Interaction):
+    # Sprawdź czy użytkownik ma uprawnienia administratora
+    if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Nie masz uprawnień do tej komendy!", ephemeral=True)
-        return
-    
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT user_id, extension, created_at FROM accounts WHERE has_account = 1 ORDER BY created_at DESC")
-    accounts = cursor.fetchall()
-    
-    conn.close()
-    
-    if not accounts:
-        await interaction.response.send_message("📊 Brak utworzonych kont w bazie.", ephemeral=True)
         return
     
     embed = discord.Embed(
-        title="📊 Lista wszystkich kont",
+        title="🔧 Panel Administracyjny",
+        description="Panel zarządzania kontami VoIP",
         color=0x00ff00
     )
     
-    for user_id, extension, created_at in accounts[:25]:  # Limit 25 kont na embed
-        embed.add_field(
-            name=f"Użytkownik: {user_id}",
-            value=f"Numer: {extension}\nUtworzono: {created_at}",
-            inline=False
-        )
-    
-    embed.set_footer(text=f"Łączna liczba kont: {len(accounts)}")
-    
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=embed, view=AdminPanel(), ephemeral=True)
 
-@tree.command(name="admin_reset_user", description="Resetuje konto użytkownika (tylko dla admina)")
-async def admin_reset_user(interaction: discord.Interaction, user_id: str):
-    """Komenda admina do resetowania konta użytkownika"""
-    if interaction.user.id != UNLIMITED_USER_ID:
-        await interaction.response.send_message("❌ Nie masz uprawnień do tej komendy!", ephemeral=True)
+@tree.command(name="moje_konto", description="Sprawdza informacje o Twoim koncie VoIP")
+async def my_account(interaction: discord.Interaction):
+    account = get_user_account(interaction.user.id)
+    
+    if not account:
+        await interaction.response.send_message(
+            "❌ Nie masz jeszcze utworzonego konta. Użyj `/panel` aby je utworzyć.",
+            ephemeral=True
+        )
         return
     
-    try:
-        user_id_int = int(user_id)
-        
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        
-        cursor.execute("DELETE FROM accounts WHERE user_id = ?", (user_id_int,))
-        conn.commit()
-        
-        if cursor.rowcount > 0:
-            await interaction.response.send_message(f"✅ Usunięto konto dla użytkownika {user_id}", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"ℹ️ Nie znaleziono konta dla użytkownika {user_id}", ephemeral=True)
-        
-        conn.close()
-        
-    except ValueError:
-        await interaction.response.send_message("❌ Nieprawidłowe ID użytkownika!", ephemeral=True)
+    embed = discord.Embed(
+        title="📞 Twoje konto VoIP",
+        color=0x00ff00
+    )
+    
+    embed.add_field(name="Numer", value=f"`{account['extension_number']}`", inline=False)
+    embed.add_field(name="Hasło", value=f"||{account['extension_password']}||", inline=False)
+    embed.add_field(name="Serwer SIP", value="`sip.voxelvoip.pl`", inline=False)
+    embed.add_field(name="Domena", value="`sip.voxelvoip.pl`", inline=False)
+    embed.add_field(name="Data utworzenia", value=account['created_at'], inline=False)
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ================= START =================
 
@@ -521,14 +429,8 @@ async def on_ready():
     # Inicjalizacja bazy danych
     init_database()
     
-    # Synchronizacja komend
     await tree.sync()
-    print(f"✅ Zalogowano jako {bot.user}")
-    print(f"📊 Baza danych: {DB_NAME}")
-    print(f"👑 Użytkownik specjalny: {UNLIMITED_USER_ID}")
-    
-    # Wczytanie istniejących kont do pamięci (opcjonalne)
-    extensions = get_all_user_extensions()
-    print(f"📞 Wczytano {len(extensions)} istniejących kont z bazy")
+    print(f"Zalogowano jako {bot.user}")
+    print(f"Baza danych: {DB_FILE}")
 
 bot.run(TOKEN)
