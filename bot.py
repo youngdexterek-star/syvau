@@ -177,27 +177,39 @@ def get_stats():
     
     return {'active': active_count, 'total': total_count}
 
-def assign_extension_to_user(discord_user_id, extension_number):
+def assign_extension_to_user(discord_user_id, extension_number, extension_password):
     """Przypisuje istniejący numer do użytkownika (funkcja dla admina)"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
     try:
-        # Pobierz nazwę użytkownika z Discorda
         user = bot.get_user(int(discord_user_id))
         user_name = user.display_name if user else str(discord_user_id)
         
         cursor.execute('''
             INSERT INTO konta (discord_user_id, discord_user_name, extension_number, extension_password, created_at)
             VALUES (?, ?, ?, ?, ?)
-        ''', (str(discord_user_id), user_name, extension_number, "admin_assigned", datetime.now()))
+        ''', (str(discord_user_id), user_name, extension_number, extension_password, datetime.now()))
         
         conn.commit()
         return True
     except sqlite3.IntegrityError:
-        return False  # Użytkownik już ma konto
+        return False
     finally:
         conn.close()
+
+def remove_user_account(discord_user_id):
+    """Usuwa konto użytkownika (hard delete)"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        DELETE FROM konta 
+        WHERE discord_user_id = ?
+    ''', (str(discord_user_id),))
+    
+    conn.commit()
+    conn.close()
 
 # ================= FREEPBX =================
 
@@ -292,7 +304,6 @@ class Panel(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            # Sprawdzenie czy użytkownik ma już numer
             if check_user_has_extension(interaction.user.id):
                 await interaction.followup.send(
                     "Można posiadać tylko jeden numer!",
@@ -301,20 +312,13 @@ class Panel(discord.ui.View):
                 return
 
             ext = generate_extension()
-
-            # create extension
             create_extension(ext, interaction.user.display_name, interaction.user.id)
-
-            # reload pbx
             reload_pbx()
-
-            # fetch real password
             data = get_extension_data(ext)
 
             real_ext = data["user"]["extension"]
             password = data["user"]["extPassword"]
 
-            # Zapisz w bazie danych
             success = save_user_account(
                 interaction.user.id,
                 interaction.user.display_name,
@@ -383,7 +387,7 @@ class AdminPanel(discord.ui.View):
             color=0x00ff00
         )
         
-        for user in users[:10]:  # Limit do 10 użytkowników na embed
+        for user in users[:10]:
             status = "Aktywny" if user['is_active'] else "Nieaktywny"
             embed.add_field(
                 name=f"{user['discord_user_name']} ({user['discord_user_id']})",
@@ -414,12 +418,19 @@ class AssignModal(discord.ui.Modal, title='Przypisz konto'):
         style=discord.TextStyle.short
     )
     
+    password = discord.ui.TextInput(
+        label='Hasło SIP',
+        placeholder='Wprowadź hasło dla numeru',
+        required=True,
+        style=discord.TextStyle.short
+    )
+    
     async def on_submit(self, interaction: discord.Interaction):
         try:
             user_id = int(self.user_id.value)
             extension_number = self.extension.value
+            extension_password = self.password.value
             
-            # Sprawdź czy użytkownik już nie ma konta
             if check_user_has_extension(user_id):
                 await interaction.response.send_message(
                     "Ten użytkownik już ma przypisane konto!",
@@ -427,10 +438,23 @@ class AssignModal(discord.ui.Modal, title='Przypisz konto'):
                 )
                 return
             
-            # Przypisz numer do użytkownika
-            success = assign_extension_to_user(user_id, extension_number)
+            success = assign_extension_to_user(user_id, extension_number, extension_password)
             
             if success:
+                user = bot.get_user(user_id)
+                if user:
+                    embed = discord.Embed(
+                        title="Twoje konto VoIP",
+                        color=0x00ff00
+                    )
+                    embed.add_field(name="Numer", value=f"`{extension_number}`", inline=False)
+                    embed.add_field(name="Hasło", value=f"||{extension_password}||", inline=False)
+                    embed.add_field(name="Serwer SIP", value="`sip.voxelvoip.pl`", inline=False)
+                    embed.add_field(name="Domena", value="`sip.voxelvoip.pl`", inline=False)
+                    embed.set_footer(text="Konto zostało przypisane przez administratora")
+                    
+                    await user.send(embed=embed)
+                
                 await interaction.response.send_message(
                     f"Pomyślnie przypisano numer {extension_number} do użytkownika o ID {user_id}",
                     ephemeral=True
@@ -452,6 +476,47 @@ class AssignModal(discord.ui.Modal, title='Przypisz konto'):
                 ephemeral=True
             )
 
+class RemoveModal(discord.ui.Modal, title='Usuń konto użytkownika'):
+    def __init__(self):
+        super().__init__()
+        
+    user_id = discord.ui.TextInput(
+        label='ID użytkownika Discord',
+        placeholder='Wprowadź ID użytkownika',
+        required=True,
+        style=discord.TextStyle.short
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            user_id = int(self.user_id.value)
+            
+            account = get_user_account(user_id)
+            if not account:
+                await interaction.response.send_message(
+                    "Ten użytkownik nie ma przypisanego konta!",
+                    ephemeral=True
+                )
+                return
+            
+            remove_user_account(user_id)
+            
+            await interaction.response.send_message(
+                f"Pomyślnie usunięto konto użytkownika o ID {user_id}",
+                ephemeral=True
+            )
+                
+        except ValueError:
+            await interaction.response.send_message(
+                "Nieprawidłowe ID użytkownika!",
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.response.send_message(
+                f"Błąd: {e}",
+                ephemeral=True
+            )
+
 class AdminPanelExtended(AdminPanel):
     def __init__(self):
         super().__init__()
@@ -459,12 +524,20 @@ class AdminPanelExtended(AdminPanel):
     @discord.ui.button(label="Przypisz konto", style=discord.ButtonStyle.green)
     async def assign_account(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(AssignModal())
+    
+    @discord.ui.button(label="Usuń konto", style=discord.ButtonStyle.red)
+    async def remove_account(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RemoveModal())
 
 # ================= COMMANDS =================
 
 @tree.command(name="panel", description="Wysyła panel z guzikiem")
 async def panel(interaction: discord.Interaction):
-
+    # Sprawdź czy użytkownik ma uprawnienia administratora
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("Nie masz uprawnień do tej komendy!", ephemeral=True)
+        return
+    
     embed = discord.Embed(
         title="Utwórz konto",
         description="Kliknij przycisk poniżej aby utworzyć konto.",
@@ -476,7 +549,6 @@ async def panel(interaction: discord.Interaction):
 
 @tree.command(name="admin", description="Panel administracyjny")
 async def admin(interaction: discord.Interaction):
-    # Sprawdź czy użytkownik ma uprawnienia administratora
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("Nie masz uprawnień do tej komendy!", ephemeral=True)
         return
@@ -491,7 +563,6 @@ async def admin(interaction: discord.Interaction):
 
 @tree.command(name="statystyki", description="Wyświetla statystyki kont")
 async def statistics(interaction: discord.Interaction):
-    # Sprawdź czy użytkownik ma uprawnienia administratora
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("Nie masz uprawnień do tej komendy!", ephemeral=True)
         return
@@ -514,7 +585,7 @@ async def my_account(interaction: discord.Interaction):
     
     if not account:
         await interaction.response.send_message(
-            "Nie masz jeszcze utworzonego konta. Użyj `/panel` aby je utworzyć.",
+            "Nie masz jeszcze utworzonego konta.",
             ephemeral=True
         )
         return
@@ -536,7 +607,6 @@ async def my_account(interaction: discord.Interaction):
 
 @bot.event
 async def on_ready():
-    # Inicjalizacja bazy danych
     init_database()
     
     await tree.sync()
