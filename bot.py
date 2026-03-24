@@ -333,6 +333,15 @@ class Panel(discord.ui.View):
                 )
                 return
 
+            # Zmiana display name użytkownika na serwerze
+            try:
+                new_nickname = f"{real_ext} {interaction.user.display_name}"
+                await interaction.user.edit(nick=new_nickname)
+            except discord.Forbidden:
+                pass  # Bot nie ma uprawnień do zmiany nicku
+            except Exception:
+                pass
+
             embed = discord.Embed(
                 title="Twoje konto VoIP",
                 color=0x00ff00
@@ -443,6 +452,17 @@ class AssignModal(discord.ui.Modal, title='Przypisz konto'):
             if success:
                 user = bot.get_user(user_id)
                 if user:
+                    # Zmiana display name użytkownika na serwerze
+                    try:
+                        member = interaction.guild.get_member(user_id)
+                        if member:
+                            new_nickname = f"{extension_number} {member.display_name}"
+                            await member.edit(nick=new_nickname)
+                    except discord.Forbidden:
+                        pass
+                    except Exception:
+                        pass
+                    
                     embed = discord.Embed(
                         title="Twoje konto VoIP",
                         color=0x00ff00
