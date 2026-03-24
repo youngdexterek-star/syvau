@@ -333,12 +333,14 @@ class Panel(discord.ui.View):
                 )
                 return
 
-            # Zmiana display name użytkownika na serwerze
+            # Zmiana nicku użytkownika na serwerze na format: <numer> stary_nick
             try:
-                new_nickname = f"{real_ext} {interaction.user.display_name}"
-                await interaction.user.edit(nick=new_nickname)
+                member = interaction.guild.get_member(interaction.user.id)
+                if member:
+                    new_nickname = f"{real_ext} {member.display_name}"
+                    await member.edit(nick=new_nickname)
             except discord.Forbidden:
-                pass  # Bot nie ma uprawnień do zmiany nicku
+                pass
             except Exception:
                 pass
 
@@ -452,7 +454,7 @@ class AssignModal(discord.ui.Modal, title='Przypisz konto'):
             if success:
                 user = bot.get_user(user_id)
                 if user:
-                    # Zmiana display name użytkownika na serwerze
+                    # Zmiana nicku użytkownika na serwerze
                     try:
                         member = interaction.guild.get_member(user_id)
                         if member:
